@@ -120,7 +120,7 @@ func (p *Pusher) sync() {
 			}
 			// send the chunk and ignore the error
 			if err := p.sendChunkMsg(ch); err != nil {
-				log.Warn("error sending chunk", "addr", ch.Address(), "err", err)
+				log.Error("error sending chunk", "addr", ch.Address(), "err", err)
 			}
 
 			// handle incoming receipts
