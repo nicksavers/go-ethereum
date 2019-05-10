@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/swarm/chunk"
@@ -47,7 +48,7 @@ type Pusher struct {
 }
 
 var (
-	retryInterval = 1 * time.Second // seconds to wait before retry sync
+	retryInterval = 2 * time.Second // seconds to wait before retry sync
 )
 
 // pushedItem captures the info needed for the pusher about a chunk during the
@@ -104,20 +105,28 @@ func (p *Pusher) sync() {
 	})
 	defer deregister()
 
+	chunksInBatch := -1
+	var batchStartTime time.Time
+
 	for {
 		select {
 
 		// handle incoming chunks
 		case ch, more := <-chunks:
+			chunksInBatch++
 			// if no more, set to nil and wait for timer
 			if !more {
 				chunks = nil
 				continue
 			}
+
+			metrics.GetOrRegisterCounter("pusher.send-chunk", nil).Inc(1)
 			// if no need to sync this chunk then continue
 			if !p.needToSync(ch) {
 				continue
 			}
+
+			metrics.GetOrRegisterCounter("pusher.send-chunk.send-to-sync", nil).Inc(1)
 			// send the chunk and ignore the error
 			if err := p.sendChunkMsg(ch); err != nil {
 				log.Error("error sending chunk", "addr", ch.Address(), "err", err)
@@ -125,17 +134,21 @@ func (p *Pusher) sync() {
 
 			// handle incoming receipts
 		case addr := <-p.receipts:
+			metrics.GetOrRegisterCounter("pusher.receipts.all", nil).Inc(1)
 			log.Debug("synced", "addr", addr)
 			// ignore if already received receipt
 			item, found := p.pushed[addr.Hex()]
 			if !found {
+				metrics.GetOrRegisterCounter("pusher.receipts.not-found", nil).Inc(1)
 				log.Debug("not wanted or already got... ignore", "addr", addr)
 				continue
 			}
 			if item.synced {
+				metrics.GetOrRegisterCounter("pusher.receipts.already-synced", nil).Inc(1)
 				log.Debug("just synced... ignore", "addr", addr)
 				continue
 			}
+			metrics.GetOrRegisterCounter("pusher.receipts.synced", nil).Inc(1)
 			// collect synced addresses
 			synced = append(synced, addr)
 			// set synced flag
@@ -147,6 +160,7 @@ func (p *Pusher) sync() {
 
 			// retry interval timer triggers starting from new
 		case <-timer.C:
+			metrics.GetOrRegisterCounter("pusher.subscribe-push", nil).Inc(1)
 			// TODO: implement some smart retry strategy relying on sent/synced ratio change
 			// if subscribe was running, stop it
 			if stop != nil {
@@ -162,6 +176,17 @@ func (p *Pusher) sync() {
 			}
 			// reset synced list
 			synced = nil
+
+			// we don't want to record the first iteration
+			if chunksInBatch != -1 {
+				// this measurement is not a timer, but we want a histogram, so it fits the data structure
+				metrics.GetOrRegisterResettingTimer("pusher.subscribe-push.chunks-in-batch.hist", nil).Update(time.Duration(chunksInBatch))
+
+				metrics.GetOrRegisterResettingTimer("pusher.subscribe-push.chunks-in-batch.time", nil).UpdateSince(batchStartTime)
+				metrics.GetOrRegisterCounter("pusher.subscribe-push.chunks-in-batch", nil).Inc(int64(chunksInBatch))
+			}
+			chunksInBatch = 0
+			batchStartTime = time.Now()
 
 			// and start iterating on Push index from the beginning
 			ctx, cancel = context.WithCancel(context.Background())

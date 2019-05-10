@@ -22,6 +22,7 @@ package http
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,8 +43,11 @@ import (
 	"github.com/ethereum/go-ethereum/swarm/chunk"
 	"github.com/ethereum/go-ethereum/swarm/log"
 	"github.com/ethereum/go-ethereum/swarm/sctx"
+	"github.com/ethereum/go-ethereum/swarm/spancontext"
 	"github.com/ethereum/go-ethereum/swarm/storage"
 	"github.com/ethereum/go-ethereum/swarm/storage/feed"
+	"github.com/opentracing/opentracing-go"
+	olog "github.com/opentracing/opentracing-go/log"
 	"github.com/rs/cors"
 )
 
@@ -300,6 +304,39 @@ func (s *Server) HandlePostFiles(w http.ResponseWriter, r *http.Request) {
 	log.Debug("handle.post.files", "ruid", ruid)
 	postFilesCount.Inc(1)
 
+	ctx, sp := spancontext.StartSpan(r.Context(), "handle.post.files")
+
+	var quitChan chan struct{}
+	defer close(quitChan)
+
+	// monitor the tag for this upload periodically and log to the `handle.post.files` span
+	go func(ctx context.Context, q chan struct{}, sp opentracing.Span) {
+		f := func() {
+			tagUid := sctx.GetTag(ctx)
+			tag, err := s.api.Tags.Get(tagUid)
+			if err != nil {
+				log.Warn("got an error retrieving", "tagUid", tagUid, "err", err)
+			}
+
+			sp.LogFields(olog.String("tag state", fmt.Sprintf("split=%d stored=%d seen=%d synced=%d", tag.Get(chunk.StateSplit), tag.Get(chunk.StateStored), tag.Get(chunk.StateSeen), tag.Get(chunk.StateSynced))))
+		}
+
+		for {
+			select {
+			case <-q:
+				f()
+
+				return
+			default:
+				f()
+
+				time.Sleep(2 * time.Second)
+			}
+		}
+	}(ctx, quitChan, sp)
+
+	defer sp.Finish()
+
 	contentType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
 		postFilesFail.Inc(1)
@@ -315,7 +352,7 @@ func (s *Server) HandlePostFiles(w http.ResponseWriter, r *http.Request) {
 
 	var addr storage.Address
 	if uri.Addr != "" && uri.Addr != "encrypt" {
-		addr, err = s.api.Resolve(r.Context(), uri.Addr)
+		addr, err = s.api.Resolve(ctx, uri.Addr)
 		if err != nil {
 			postFilesFail.Inc(1)
 			respondError(w, r, fmt.Sprintf("cannot resolve %s: %s", uri.Addr, err), http.StatusInternalServerError)
@@ -323,7 +360,7 @@ func (s *Server) HandlePostFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Debug("resolved key", "ruid", ruid, "key", addr)
 	} else {
-		addr, err = s.api.NewManifest(r.Context(), toEncrypt)
+		addr, err = s.api.NewManifest(ctx, toEncrypt)
 		if err != nil {
 			postFilesFail.Inc(1)
 			respondError(w, r, err.Error(), http.StatusInternalServerError)
@@ -331,7 +368,7 @@ func (s *Server) HandlePostFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Debug("new manifest", "ruid", ruid, "key", addr)
 	}
-	newAddr, err := s.api.UpdateManifest(r.Context(), addr, func(mw *api.ManifestWriter) error {
+	newAddr, err := s.api.UpdateManifest(ctx, addr, func(mw *api.ManifestWriter) error {
 		switch contentType {
 		case "application/x-tar":
 			_, err := s.handleTarUpload(r, mw)

@@ -33,6 +33,8 @@ var (
 // State is the enum type for chunk states
 type State = uint32
 
+// stored - seen === sent
+// stored - seen === synced
 const (
 	StateSplit  State = iota // chunk has been processed by filehasher/swarm safe call
 	StateStored              // chunk stored locally
