@@ -26,9 +26,6 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/swarm/chunk"
 	"github.com/ethereum/go-ethereum/swarm/shed"
-	"github.com/ethereum/go-ethereum/swarm/spancontext"
-	"github.com/opentracing/opentracing-go"
-	olog "github.com/opentracing/opentracing-go/log"
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
@@ -88,8 +85,9 @@ func (db *DB) SubscribePull(ctx context.Context, bin uint8, since, until uint64)
 				// - context is done
 				metrics.GetOrRegisterCounter(metricName+".iter", nil).Inc(1)
 
-				ctx, sp := spancontext.StartSpan(ctx, metricName+".iter")
-				sp.LogFields(olog.Int("bin", int(bin)), olog.Uint64("since", since), olog.Uint64("until", until))
+				//TODO: this is useful, but we should keep the spans within the db maybe (in order to reduce their number) and `finish` them periodically
+				//ctx, sp := spancontext.StartSpan(ctx, metricName+".iter")
+				//sp.LogFields(olog.Int("bin", int(bin)), olog.Uint64("since", since), olog.Uint64("until", until))
 
 				iterStart := time.Now()
 				var count int
@@ -131,14 +129,14 @@ func (db *DB) SubscribePull(ctx context.Context, bin uint8, since, until uint64)
 
 				totalTimeMetric(metricName+".iter", iterStart)
 
-				sp.FinishWithOptions(opentracing.FinishOptions{
-					LogRecords: []opentracing.LogRecord{
-						{
-							Timestamp: time.Now(),
-							Fields:    []olog.Field{olog.Int("count", count)},
-						},
-					},
-				})
+				//sp.FinishWithOptions(opentracing.FinishOptions{
+				//LogRecords: []opentracing.LogRecord{
+				//{
+				//Timestamp: time.Now(),
+				//Fields:    []olog.Field{olog.Int("count", count)},
+				//},
+				//},
+				//})
 
 				if err != nil {
 					if err == errStopSubscription {

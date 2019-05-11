@@ -65,10 +65,26 @@ func uploadAndSyncCmd(ctx *cli.Context) error {
 		err = fmt.Errorf("timeout after %v sec", timeout)
 	}
 
-	// trigger debug functionality on randomBytes
-	e := trackChunks(randomBytes[:], true)
-	if e != nil {
-		log.Error(e.Error())
+	if err != nil {
+		return err
+	}
+
+	errc = make(chan error)
+
+	go func() {
+		errc <- trackChunks(randomBytes[:], true)
+	}()
+
+	var e error
+	select {
+	case e = <-errc:
+		if e != nil {
+			log.Error(e.Error())
+		}
+	case <-time.After(time.Duration(timeout) * time.Second):
+		metrics.GetOrRegisterCounter(fmt.Sprintf("%s.timeout", commandName), nil).Inc(1)
+
+		err = fmt.Errorf("track timeout after %v sec", timeout)
 	}
 
 	return err
