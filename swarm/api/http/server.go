@@ -306,7 +306,7 @@ func (s *Server) HandlePostFiles(w http.ResponseWriter, r *http.Request) {
 
 	ctx, sp := spancontext.StartSpan(r.Context(), "handle.post.files")
 
-	var quitChan chan struct{}
+	quitChan := make(chan struct{})
 	defer close(quitChan)
 
 	// monitor the tag for this upload periodically and log to the `handle.post.files` span
